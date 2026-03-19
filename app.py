@@ -37,10 +37,10 @@ if 'input_data' not in st.session_state:
     ])
 
 st.subheader(f"1. Enter LDL Lab History ({unit_label})")
-st.info("ℹ️ **Row 1 Note:** Humans are born with an average LDL of **0.7 mmol/L (27 mg/dL)**. This is your baseline.\n\n"
-        "💡 **How to Edit:** You can paste from Excel, add new rows at the bottom, or select a row and press 'Delete' on your keyboard.")
+st.info("ℹ️ **Row 1 Note:** Humans are born with an average LDL of **0.7 mmol/L (27 mg/dL)**.\n\n"
+        "💡 **How to Edit:** Paste from Excel, add rows at bottom, or select a row and press 'Delete'.")
 
-# Display Data Editor - Columns: Date, LDL, Age at Test (Age at Test starts empty here)
+# THE ONLY TABLE: Date and LDL
 edited_df = st.data_editor(
     st.session_state.input_data[['Date', 'LDL']], 
     num_rows="dynamic",
@@ -66,15 +66,14 @@ def solve_for_age(calc_df, limit_mmol, last_age, last_exp, target_mmol):
         return last_age + years_to_go, "Projected"
 
 try:
-    # 1. Clean Data
+    # Clean and calculate Age internally
     df_clean = edited_df.dropna(subset=['Date', 'LDL']).copy()
     df_clean['Date'] = pd.to_datetime(df_clean['Date']).dt.date
     df_clean = df_clean.sort_values("Date").reset_index(drop=True)
     
-    # 2. Add Age at Test to the Cleaned Data (Calculated dynamically)
-    df_clean['Age at Test'] = df_clean['Date'].apply(lambda x: round((x - dob).days / 365.25, 1))
+    # Calculate Age internally so it's always accurate
+    df_clean['Age'] = df_clean['Date'].apply(lambda x: (x - dob).days / 365.25)
     
-    # 3. Handle Units
     if is_mgdl:
         df_clean['LDL_mmol'] = df_clean['LDL'] / 38.67
         target_mmol = target_ldl / 38.67
@@ -82,8 +81,6 @@ try:
         df_clean['LDL_mmol'] = df_clean['LDL']
         target_mmol = target_ldl
 
-    # 4. Exposure Math
-    df_clean['Age'] = df_clean['Age at Test']
     df_clean['Exposure_mmol'] = 0.0
     for i in range(1, len(df_clean)):
         yrs = df_clean.loc[i, 'Age'] - df_clean.loc[i-1, 'Age']
@@ -96,11 +93,7 @@ try:
     pl_age, pl_stat = solve_for_age(df_clean, 130, last_age, last_exp, target_mmol)
     ha_age, ha_stat = solve_for_age(df_clean, 190, last_age, last_exp, target_mmol)
     
-    # Show the table with calculated ages right before the results
-    st.write("**Calculated History:**")
-    st.dataframe(df_clean[['Date', 'LDL', 'Age at Test']], use_container_width=True)
-
-    # --- OUTPUT DASHBOARD ---
+    # --- OUTPUTS ---
     st.subheader("2. Analysis Results")
     c1, c2, c3 = st.columns(3)
     with c1:
