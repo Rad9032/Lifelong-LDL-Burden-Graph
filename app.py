@@ -37,9 +37,10 @@ if 'input_data' not in st.session_state:
     ])
 
 st.subheader(f"1. Enter LDL Lab History ({unit_label})")
-st.info(f"ℹ️ **Note on Row 1:** Science shows humans are born with an average LDL of **0.7 mmol/L (approx. 27 mg/dL)**. This baseline is used to calculate your 'head start' on cholesterol exposure.")
+st.info("ℹ️ **Row 1 Note:** Humans are born with an average LDL of **0.7 mmol/L (27 mg/dL)**. This is your baseline.\n\n"
+        "💡 **How to Edit:** You can paste from Excel, add new rows at the bottom, or select a row and press 'Delete' on your keyboard.")
 
-# Pre-calculate Age for the display table
+# Prepare display table with Age at Test
 input_df = st.session_state.input_data.copy()
 input_df['Date'] = pd.to_datetime(input_df['Date']).dt.date
 input_df['Age at Test'] = input_df['Date'].apply(lambda x: round((x - dob).days / 365.25, 1))
@@ -50,7 +51,7 @@ edited_df = st.data_editor(
     use_container_width=True,
     column_config={
         "Date": st.column_config.DateColumn("Date of Test", required=True),
-        "Age at Test": st.column_config.NumberColumn("Age at Test", disabled=True, help="Calculated automatically from DOB"),
+        "Age at Test": st.column_config.NumberColumn("Age at Test", disabled=True),
         "LDL": st.column_config.NumberColumn(f"LDL ({unit_label})", required=True)
     }
 )
@@ -94,7 +95,7 @@ try:
     pl_age, pl_stat = solve_for_age(df_clean, 130, last_age, last_exp, target_mmol)
     ha_age, ha_stat = solve_for_age(df_clean, 190, last_age, last_exp, target_mmol)
     
-    # --- OUTPUT DASHBOARD ---
+    # --- OUTPUTS ---
     st.subheader("2. Analysis Results")
     c1, c2, c3 = st.columns(3)
     with c1:
@@ -109,21 +110,25 @@ try:
         curr_burden = last_exp * (38.67 if is_mgdl else 1.0)
         st.metric("Current Total Burden", f"{curr_burden:.0f} {burden_unit}")
 
-    # --- THE GRAPH ---
+    # --- GRAPH ---
     fig = go.Figure()
     graph_y = df_clean['Exposure_mmol'] * (38.67 if is_mgdl else 1.0)
     fig.add_trace(go.Scatter(x=df_clean['Age'], y=graph_y, mode='lines+markers', name="Your Burden", line=dict(color='#4285F4', width=4)))
     
-    # Improved visibility for limit lines
+    # Static colors that work in both themes
     fig.add_hline(y=plaque_limit, line=dict(color='#FBBC04', dash='dash'), 
-                  annotation_text="Plaque Limit", annotation_position="top left",
-                  annotation_font=dict(color="white" if st.get_option("theme.base") == "dark" else "black"))
+                  annotation_text="Plaque Limit", annotation_position="top left")
     fig.add_hline(y=ha_limit, line=dict(color='#EA4335', dash='dash'), 
-                  annotation_text="Heart Attack Limit", annotation_position="top left",
-                  annotation_font=dict(color="white" if st.get_option("theme.base") == "dark" else "black"))
+                  annotation_text="Heart Attack Limit", annotation_position="top left")
     
-    fig.update_layout(xaxis_title="Age (Years)", yaxis_title=f"Cumulative Exposure ({burden_unit})", plot_bgcolor='rgba(0,0,0,0)')
+    fig.update_layout(
+        xaxis_title="Age (Years)", 
+        yaxis_title=f"Cumulative Exposure ({burden_unit})",
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)',
+        font=dict(color="#808080") # Neutral grey font visible everywhere
+    )
     st.plotly_chart(fig, use_container_width=True)
 
 except Exception:
-    st.info("Please enter your Date of Birth and at least one lab result above.")
+    st.info("Awaiting valid Date and LDL entries...")
