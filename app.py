@@ -7,33 +7,32 @@ st.set_page_config(page_title="LDL Burden Tracker", layout="wide")
 
 st.title("🫀 Lifelong LDL Burden Calculator")
 
-# --- UNIT TOGGLE ---
-unit_choice = st.radio("Select your Units:", ["mmol/L (Canada/UK/World)", "mg/dL (USA)"], horizontal=True)
-is_mgdl = unit_choice == "mg/dL (USA)"
+# --- UNIT TOGGLE (Cleaned up labels) ---
+unit_choice = st.radio("Select Units:", ["mmol/L", "mg/dL"], horizontal=True)
+is_mgdl = unit_choice == "mg/dL"
 
-# Conversion Factor: 1 mmol/L = 38.67 mg/dL. 
-# To go from mg/dL to mmol/L, we divide by 38.67 (or multiply by 0.02586)
-CONV = 38.67 if is_mgdl else 1.0
+# Standards
 unit_label = "mg/dL" if is_mgdl else "mmol/L"
 plaque_limit = 5000 if is_mgdl else 130
 ha_limit = 8000 if is_mgdl else 190
 
-# --- SIDEBAR: TARGETS & DOB ---
-st.sidebar.header("Patient Setup")
+# --- SIDEBAR: PERSONAL INFORMATION ---
+st.sidebar.header("Personal Information")
 dob = st.sidebar.date_input("Date of Birth", value=datetime(1980, 1, 1))
-target_val = 70.0 if is_mgdl else 1.8
-target_ldl = st.sidebar.number_input(f"Target LDL ({unit_label})", value=target_val, step=1.0 if is_mgdl else 0.1)
 
-# Initialize session state for the data table
+# Target LDL also switches based on unit choice
+default_target = 70.0 if is_mgdl else 1.8
+target_ldl = st.sidebar.number_input(f"Target LDL ({unit_label})", value=default_target, step=1.0 if is_mgdl else 0.1)
+
+# Initialize data
 if 'input_data' not in st.session_state:
-    # Default data in mmol/L
     st.session_state.input_data = pd.DataFrame([
         {"Date": dob, "LDL": 0.70},
         {"Date": datetime(2010, 1, 1), "LDL": 3.50},
         {"Date": datetime.now().date(), "LDL": 2.50}
     ])
 
-# Adjust display data based on unit selection
+# Adjust display data
 display_df = st.session_state.input_data.copy()
 if is_mgdl:
     display_df['LDL'] = (display_df['LDL'] * 38.67).round(0)
@@ -45,13 +44,12 @@ edited_df = st.data_editor(
     use_container_width=True,
     column_config={
         "Date": st.column_config.DateColumn("Date of Test"),
-        "LDL": st.column_config.NumberColumn(f"LDL ({unit_label})", format="%d" if is_mgdl else "%.2f")
+        "LDL": st.column_config.NumberColumn(f"LDL ({unit_label})")
     }
 )
 
 # --- CALCULATIONS ---
 def run_calculations(df, birth_date, target, is_us):
-    # If US, convert user inputs back to mmol/L for the internal math engine
     calc_df = df.dropna().sort_values("Date").reset_index(drop=True)
     if is_us:
         calc_df['LDL_mmol'] = calc_df['LDL'] / 38.67
@@ -62,7 +60,6 @@ def run_calculations(df, birth_date, target, is_us):
 
     calc_df['Age'] = calc_df['Date'].apply(lambda x: (pd.to_datetime(x).date() - birth_date).days / 365.25)
     
-    # Cumulative Exposure in mmol/L years
     calc_df['Exposure_mmol'] = 0.0
     for i in range(1, len(calc_df)):
         years_passed = calc_df.loc[i, 'Age'] - calc_df.loc[i-1, 'Age']
@@ -71,7 +68,6 @@ def run_calculations(df, birth_date, target, is_us):
     last_age = calc_df.iloc[-1]['Age']
     last_exp_mmol = calc_df.iloc[-1]['Exposure_mmol']
     
-    # Metrics
     output_metrics = {}
     for label, limit_mmol in [("Plaque", 130), ("Heart Attack", 190)]:
         if last_exp_mmol >= limit_mmol:
@@ -86,7 +82,7 @@ def run_calculations(df, birth_date, target, is_us):
 calc_df, results, current_exp_mmol = run_calculations(edited_df, dob, target_ldl, is_mgdl)
 current_exp_display = current_exp_mmol * (38.67 if is_mgdl else 1.0)
 
-# --- OUTPUT DASHBOARD ---
+# --- OUTPUTS ---
 st.subheader("2. Your Results")
 c1, c2, c3 = st.columns(3)
 with c1:
@@ -94,11 +90,10 @@ with c1:
 with c2:
     st.metric(f"Heart Attack Age ({ha_limit} limit)", results["Heart Attack"])
 with c3:
-    st.metric(f"Total Current Burden ({unit_label}.years)", f"{current_exp_display:.0f}" if is_mgdl else f"{current_exp_display:.1f}")
+    st.metric(f"Total Burden ({unit_label}.years)", f"{current_exp_display:.0f}" if is_mgdl else f"{current_exp_display:.1f}")
 
 # --- THE GRAPH ---
 fig = go.Figure()
-# Use display units for graph Y axis
 graph_y = calc_df['Exposure_mmol'] * (38.67 if is_mgdl else 1.0)
 
 fig.add_trace(go.Scatter(x=calc_df['Age'], y=graph_y, mode='lines+markers', name="Your Burden", line=dict(color='#4285F4', width=4)))
