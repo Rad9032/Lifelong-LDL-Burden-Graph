@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime
+import numpy as np
 
 st.set_page_config(page_title="LDL Burden Tracker", layout="wide")
 
@@ -17,7 +18,13 @@ ha_limit = 8000 if is_mgdl else 190
 
 # --- SIDEBAR: PERSONAL INFORMATION ---
 st.sidebar.header("Personal Information")
-dob = st.sidebar.date_input("Date of Birth", value=datetime(1970, 1, 1), min_value=datetime(1900, 1, 1), max_value=datetime.now())
+# Expanded date range for birth date
+dob = st.sidebar.date_input(
+    "Date of Birth", 
+    value=datetime(1970, 1, 1), 
+    min_value=datetime(1900, 1, 1), 
+    max_value=datetime.now()
+)
 
 default_target = 70.0 if is_mgdl else 1.8
 target_ldl = st.sidebar.number_input(f"Target LDL ({unit_label})", value=default_target, step=1.0 if is_mgdl else 0.1)
@@ -31,10 +38,11 @@ if 'input_data' not in st.session_state:
     ])
 
 st.subheader(f"1. Enter LDL Lab History ({unit_label})")
-# We use a copy to avoid internal conflicts
+st.info("💡 Pro Tip: You can copy two columns from Excel and paste them directly into the table below.")
+
 edited_df = st.data_editor(
     st.session_state.input_data, 
-    num_rows="dynamic", 
+    num_rows="dynamic", # Enables adding/deleting/pasting rows
     use_container_width=True,
     column_config={
         "Date": st.column_config.DateColumn("Date of Test", required=True),
@@ -42,75 +50,87 @@ edited_df = st.data_editor(
     }
 )
 
-# --- BULLETPROOF CALCULATIONS ---
-def run_calculations(df, birth_date, target, is_us):
-    # 1. Clean data: Remove empty rows and convert dates properly
-    calc_df = df.copy().dropna()
-    calc_df['Date'] = pd.to_datetime(calc_df['Date']).dt.date
-    calc_df = calc_df.sort_values("Date").reset_index(drop=True)
+# --- CALCULATIONS ---
+def solve_for_age(calc_df, limit_mmol, last_age, last_exp, target_mmol):
+    # Check if limit was reached in the past
+    reached_past = calc_df[calc_df['Exposure_mmol'] >= limit_mmol]
     
-    # 2. Unit Conversion
-    if is_us:
-        calc_df['LDL_mmol'] = calc_df['LDL'] / 38.67
-        target_mmol = target / 38.67
+    if not reached_past.empty:
+        idx = reached_past.index[0]
+        if idx == 0: return calc_df.loc[0, 'Age'], "Historical"
+        
+        # Linear interpolation to find the exact age between two data points
+        age_start = calc_df.loc[idx-1, 'Age']
+        age_end = calc_df.loc[idx, 'Age']
+        exp_start = calc_df.loc[idx-1, 'Exposure_mmol']
+        exp_end = calc_df.loc[idx, 'Exposure_mmol']
+        
+        exact_age = age_start + (limit_mmol - exp_start) * (age_end - age_start) / (exp_end - exp_start)
+        return exact_age, "Historical"
     else:
-        calc_df['LDL_mmol'] = calc_df['LDL']
-        target_mmol = target
+        # Projection into the future
+        years_to_go = (limit_mmol - last_exp) / target_mmol
+        return last_age + years_to_go, "Projected"
 
-    # 3. Calculate Age and Exposure
-    calc_df['Age'] = calc_df['Date'].apply(lambda x: (x - birth_date).days / 365.25)
-    
-    calc_df['Exposure_mmol'] = 0.0
-    for i in range(1, len(calc_df)):
-        years_passed = calc_df.loc[i, 'Age'] - calc_df.loc[i-1, 'Age']
-        # Trapezoidal rule for smoother burden calculation
-        avg_ldl = (calc_df.loc[i, 'LDL_mmol'] + calc_df.loc[i-1, 'LDL_mmol']) / 2
-        calc_df.loc[i, 'Exposure_mmol'] = calc_df.loc[i-1, 'Exposure_mmol'] + (years_passed * avg_ldl)
-    
-    last_age = calc_df.iloc[-1]['Age']
-    last_exp_mmol = calc_df.iloc[-1]['Exposure_mmol']
-    
-    # 4. Predictions
-    output_metrics = {}
-    for label, limit_mmol in [("Plaque", 130), ("Heart Attack", 190)]:
-        if last_exp_mmol >= limit_mmol:
-            # Linear interpolation to find the exact age the limit was hit
-            output_metrics[label] = "Limit Reached"
-        else:
-            years_to_go = (limit_mmol - last_exp_mmol) / target_mmol
-            output_metrics[label] = f"Age {last_age + years_to_go:.1f}"
-            
-    return calc_df, output_metrics, last_exp_mmol
-
-# Run the math
 try:
-    calc_df, results, current_exp_mmol = run_calculations(edited_df, dob, target_ldl, is_mgdl)
-    current_exp_display = current_exp_mmol * (38.67 if is_mgdl else 1.0)
+    # Clean and sort
+    df_clean = edited_df.dropna().copy()
+    df_clean['Date'] = pd.to_datetime(df_clean['Date']).dt.date
+    df_clean = df_clean.sort_values("Date").reset_index(drop=True)
+    
+    # Unit Conversion
+    if is_mgdl:
+        df_clean['LDL_mmol'] = df_clean['LDL'] / 38.67
+        target_mmol = target_ldl / 38.67
+    else:
+        df_clean['LDL_mmol'] = df_clean['LDL']
+        target_mmol = target_ldl
 
-    # --- OUTPUTS ---
-    st.subheader("2. Your Results")
+    # Calculate Cumulative Exposure (Trapezoidal)
+    df_clean['Age'] = df_clean['Date'].apply(lambda x: (x - dob).days / 365.25)
+    df_clean['Exposure_mmol'] = 0.0
+    for i in range(1, len(df_clean)):
+        yrs = df_clean.loc[i, 'Age'] - df_clean.loc[i-1, 'Age']
+        avg_ldl = (df_clean.loc[i, 'LDL_mmol'] + df_clean.loc[i-1, 'LDL_mmol']) / 2
+        df_clean.loc[i, 'Exposure_mmol'] = df_clean.loc[i-1, 'Exposure_mmol'] + (yrs * avg_ldl)
+    
+    last_age = df_clean.iloc[-1]['Age']
+    last_exp = df_clean.iloc[-1]['Exposure_mmol']
+    
+    # Solve for thresholds
+    plaque_age, plaque_status = solve_for_age(df_clean, 130, last_age, last_exp, target_mmol)
+    ha_age, ha_status = solve_for_age(df_clean, 190, last_age, last_exp, target_mmol)
+    
+    # --- OUTPUT DASHBOARD ---
+    st.subheader("2. Analysis Results")
     c1, c2, c3 = st.columns(3)
+    
     with c1:
-        st.metric(f"Plaque Age ({plaque_limit})", results["Plaque"])
+        st.metric(f"Plaque Age ({plaque_limit})", f"{plaque_age:.1f}")
+        if plaque_status == "Historical":
+            st.warning(f"⚠️ **THOLD REACHED** at Age {plaque_age:.1f}")
+        else:
+            st.success(f"✅ Projection: Age {plaque_age:.1f}")
+            
     with c2:
-        st.metric(f"Heart Attack Age ({ha_limit})", results["Heart Attack"])
+        st.metric(f"Heart Attack Age ({ha_limit})", f"{ha_age:.1f}")
+        if ha_status == "Historical":
+            st.error(f"🚨 **THOLD REACHED** at Age {ha_age:.1f}")
+        else:
+            st.success(f"✅ Projection: Age {ha_age:.1f}")
+            
     with c3:
-        st.metric(f"Total Burden ({unit_label}·yr)", f"{current_exp_display:.0f}" if is_mgdl else f"{current_exp_display:.1f}")
+        curr_burden = last_exp * (38.67 if is_mgdl else 1.0)
+        st.metric("Current Total Burden", f"{curr_burden:.0f} units")
 
     # --- THE GRAPH ---
     fig = go.Figure()
-    graph_y = calc_df['Exposure_mmol'] * (38.67 if is_mgdl else 1.0)
-
-    fig.add_trace(go.Scatter(x=calc_df['Age'], y=graph_y, mode='lines+markers', name="Your Burden", line=dict(color='#4285F4', width=4)))
-    fig.add_hline(y=plaque_limit, line=dict(color='#FBBC04', width=2, dash='dash'), annotation_text="Plaque")
-    fig.add_hline(y=ha_limit, line=dict(color='#EA4335', width=2, dash='dash'), annotation_text="Heart Attack")
-
-    fig.update_layout(
-        xaxis=dict(title="Age (Years)", showgrid=True),
-        yaxis=dict(title=f"Cumulative Exposure ({unit_label} . years)", showgrid=True),
-        plot_bgcolor='white', height=500
-    )
+    graph_y = df_clean['Exposure_mmol'] * (38.67 if is_mgdl else 1.0)
+    fig.add_trace(go.Scatter(x=df_clean['Age'], y=graph_y, mode='lines+markers', name="Your Burden", line=dict(color='#4285F4', width=4)))
+    fig.add_hline(y=plaque_limit, line=dict(color='#FBBC04', dash='dash'), annotation_text="Plaque")
+    fig.add_hline(y=ha_limit, line=dict(color='#EA4335', dash='dash'), annotation_text="Heart Attack")
+    fig.update_layout(xaxis_title="Age (Years)", yaxis_title=f"Cumulative Exposure ({unit_label}·yr)", plot_bgcolor='white')
     st.plotly_chart(fig, use_container_width=True)
 
 except Exception as e:
-    st.error("Please ensure all rows have a Date and LDL value.")
+    st.warning("Awaiting valid Date and LDL entries to calculate...")
