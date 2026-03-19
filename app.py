@@ -17,7 +17,7 @@ ha_limit = 8000 if is_mgdl else 190
 
 # --- SIDEBAR: PERSONAL INFORMATION ---
 st.sidebar.header("Personal Information")
-dob = st.sidebar.date_input("Date of Birth", value=datetime(1980, 1, 1))
+dob = st.sidebar.date_input("Date of Birth", value=datetime(1970, 1, 1), min_value=datetime(1900, 1, 1), max_value=datetime.now())
 
 default_target = 70.0 if is_mgdl else 1.8
 target_ldl = st.sidebar.number_input(f"Target LDL ({unit_label})", value=default_target, step=1.0 if is_mgdl else 0.1)
