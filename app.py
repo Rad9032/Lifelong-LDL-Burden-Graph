@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-from datetime import datetime
+from datetime import datetime, date
 
 st.set_page_config(page_title="LDL Burden Tracker", layout="wide")
 
@@ -18,30 +18,43 @@ ha_limit = 8000 if is_mgdl else 190
 
 # --- SIDEBAR: PERSONAL INFORMATION ---
 st.sidebar.header("Personal Information")
-# This date now controls the first row of the table
 dob = st.sidebar.date_input(
     "Date of Birth", 
-    value=datetime(1970, 1, 1), 
-    min_value=datetime(1900, 1, 1), 
-    max_value=datetime.now()
+    value=date(1970, 1, 1), 
+    min_value=date(1900, 1, 1), 
+    max_value=date.today()
 )
 
 default_target = 70.0 if is_mgdl else 1.8
 target_ldl = st.sidebar.number_input(f"Target LDL ({unit_label})", value=default_target, step=1.0 if is_mgdl else 0.1)
 
-# --- DATA INPUT LOGIC ---
-if 'input_data' not in st.session_state:
-    st.session_state.input_data = pd.DataFrame([
-        {"Date": dob, "LDL": 0.70 if not is_mgdl else 27.0},
-        {"Date": datetime(2010, 1, 1), "LDL": 3.50 if not is_mgdl else 135.0},
-        {"Date": datetime.now().date(), "LDL": 2.50 if not is_mgdl else 97.0}
-    ])
+# --- DYNAMIC DATA POPULATION ---
+# We generate 10-year intervals based on the chosen DOB
+def generate_default_data(birth_date):
+    today = date.today()
+    rows = [{"Date": birth_date, "LDL": 0.70 if not is_mgdl else 27.0}]
+    
+    current_year = birth_date.year + 10
+    while current_year < today.year:
+        try:
+            check_date = birth_date.replace(year=current_year)
+            rows.append({"Date": check_date, "LDL": None})
+        except ValueError: # Handle Feb 29th issues
+            rows.append({"Date": date(current_year, birth_date.month, birth_date.day - 1), "LDL": None})
+        current_year += 10
+        
+    # Add a row for today if the last interval is old
+    if rows[-1]["Date"] < today:
+        rows.append({"Date": today, "LDL": None})
+    return pd.DataFrame(rows)
 
-# Force the first row to match the sidebar DOB
-st.session_state.input_data.iloc[0, st.session_state.input_data.columns.get_loc("Date")] = dob
+# Reset table if DOB changes to keep the 10-year logic fresh
+if 'last_dob' not in st.session_state or st.session_state.last_dob != dob:
+    st.session_state.input_data = generate_default_data(dob)
+    st.session_state.last_dob = dob
 
 st.subheader(f"1. Enter LDL Lab History ({unit_label})")
-st.info("ℹ️ **Row 1 Note:** Humans are born with an average LDL of **0.7 mmol/L (27 mg/dL)**. This date is synced to your Birth Date in the sidebar.\n\n"
+st.info("ℹ️ **Row 1 Note:** Born LDL baseline is **0.7 mmol/L (27 mg/dL)**. Dates are suggested every 10 years but can be edited or deleted.\n\n"
         "💡 **How to Edit:** Paste from Excel, add rows at bottom, or select a row and press 'Delete'.")
 
 # Calculate Age at Test for display
@@ -49,7 +62,7 @@ display_df = st.session_state.input_data.copy()
 display_df['Date'] = pd.to_datetime(display_df['Date']).dt.date
 display_df['Age at Test'] = display_df['Date'].apply(lambda x: round((x - dob).days / 365.25, 1))
 
-# THE TABLE: Reordered as requested
+# THE TABLE
 edited_df = st.data_editor(
     display_df[['Date', 'LDL', 'Age at Test']], 
     num_rows="dynamic",
@@ -80,7 +93,6 @@ try:
     df_clean['Date'] = pd.to_datetime(df_clean['Date']).dt.date
     df_clean = df_clean.sort_values("Date").reset_index(drop=True)
     
-    # Recalculate Age internally for math accuracy
     df_clean['Age'] = df_clean['Date'].apply(lambda x: (x - dob).days / 365.25)
     
     if is_mgdl:
@@ -122,18 +134,10 @@ try:
     graph_y = df_clean['Exposure_mmol'] * (38.67 if is_mgdl else 1.0)
     fig.add_trace(go.Scatter(x=df_clean['Age'], y=graph_y, mode='lines+markers', name="Your Burden", line=dict(color='#4285F4', width=4)))
     
-    # High contrast lines for dark mode
-    fig.add_hline(y=plaque_limit, line=dict(color='#FBBC04', dash='dash', width=2), 
-                  annotation_text="Plaque Limit", annotation_position="top left")
-    fig.add_hline(y=ha_limit, line=dict(color='#EA4335', dash='dash', width=2), 
-                  annotation_text="Heart Attack Limit", annotation_position="top left")
+    fig.add_hline(y=plaque_limit, line=dict(color='#FBBC04', dash='dash', width=2), annotation_text="Plaque Limit", annotation_position="top left")
+    fig.add_hline(y=ha_limit, line=dict(color='#EA4335', dash='dash', width=2), annotation_text="Heart Attack Limit", annotation_position="top left")
     
-    fig.update_layout(
-        xaxis_title="Age (Years)", 
-        yaxis_title=f"Cumulative Exposure ({burden_unit})",
-        plot_bgcolor='rgba(0,0,0,0)',
-        paper_bgcolor='rgba(0,0,0,0)'
-    )
+    fig.update_layout(xaxis_title="Age (Years)", yaxis_title=f"Cumulative Exposure ({burden_unit})", plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)')
     fig.update_xaxes(showgrid=True, gridcolor='Gray')
     fig.update_yaxes(showgrid=True, gridcolor='Gray')
     
