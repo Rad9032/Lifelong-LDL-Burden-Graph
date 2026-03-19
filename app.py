@@ -18,6 +18,7 @@ ha_limit = 8000 if is_mgdl else 190
 
 # --- SIDEBAR: PERSONAL INFORMATION ---
 st.sidebar.header("Personal Information")
+# This date now controls the first row of the table
 dob = st.sidebar.date_input(
     "Date of Birth", 
     value=datetime(1970, 1, 1), 
@@ -28,7 +29,7 @@ dob = st.sidebar.date_input(
 default_target = 70.0 if is_mgdl else 1.8
 target_ldl = st.sidebar.number_input(f"Target LDL ({unit_label})", value=default_target, step=1.0 if is_mgdl else 0.1)
 
-# --- DATA INPUT ---
+# --- DATA INPUT LOGIC ---
 if 'input_data' not in st.session_state:
     st.session_state.input_data = pd.DataFrame([
         {"Date": dob, "LDL": 0.70 if not is_mgdl else 27.0},
@@ -36,18 +37,27 @@ if 'input_data' not in st.session_state:
         {"Date": datetime.now().date(), "LDL": 2.50 if not is_mgdl else 97.0}
     ])
 
+# Force the first row to match the sidebar DOB
+st.session_state.input_data.iloc[0, st.session_state.input_data.columns.get_loc("Date")] = dob
+
 st.subheader(f"1. Enter LDL Lab History ({unit_label})")
-st.info("ℹ️ **Row 1 Note:** Humans are born with an average LDL of **0.7 mmol/L (27 mg/dL)**.\n\n"
+st.info("ℹ️ **Row 1 Note:** Humans are born with an average LDL of **0.7 mmol/L (27 mg/dL)**. This date is synced to your Birth Date in the sidebar.\n\n"
         "💡 **How to Edit:** Paste from Excel, add rows at bottom, or select a row and press 'Delete'.")
 
-# THE ONLY TABLE: Date and LDL
+# Calculate Age at Test for display
+display_df = st.session_state.input_data.copy()
+display_df['Date'] = pd.to_datetime(display_df['Date']).dt.date
+display_df['Age at Test'] = display_df['Date'].apply(lambda x: round((x - dob).days / 365.25, 1))
+
+# THE TABLE: Reordered as requested
 edited_df = st.data_editor(
-    st.session_state.input_data[['Date', 'LDL']], 
+    display_df[['Date', 'LDL', 'Age at Test']], 
     num_rows="dynamic",
     use_container_width=True,
     column_config={
         "Date": st.column_config.DateColumn("Date of Test", required=True),
         "LDL": st.column_config.NumberColumn(f"LDL ({unit_label})", required=True),
+        "Age at Test": st.column_config.NumberColumn("Age at Test", disabled=True)
     }
 )
 
@@ -66,12 +76,11 @@ def solve_for_age(calc_df, limit_mmol, last_age, last_exp, target_mmol):
         return last_age + years_to_go, "Projected"
 
 try:
-    # Clean and calculate Age internally
     df_clean = edited_df.dropna(subset=['Date', 'LDL']).copy()
     df_clean['Date'] = pd.to_datetime(df_clean['Date']).dt.date
     df_clean = df_clean.sort_values("Date").reset_index(drop=True)
     
-    # Calculate Age internally so it's always accurate
+    # Recalculate Age internally for math accuracy
     df_clean['Age'] = df_clean['Date'].apply(lambda x: (x - dob).days / 365.25)
     
     if is_mgdl:
@@ -93,17 +102,17 @@ try:
     pl_age, pl_stat = solve_for_age(df_clean, 130, last_age, last_exp, target_mmol)
     ha_age, ha_stat = solve_for_age(df_clean, 190, last_age, last_exp, target_mmol)
     
-    # --- OUTPUTS ---
+    # --- OUTPUT DASHBOARD ---
     st.subheader("2. Analysis Results")
     c1, c2, c3 = st.columns(3)
     with c1:
         st.metric(f"Plaque Threshold ({plaque_limit})", f"Age {pl_age:.1f}")
         if pl_stat == "Historical": st.warning("⚠️ **Threshold Reached**")
-        else: st.success("✅ Predicted")
+        else: st.success("✅ Projected")
     with c2:
         st.metric(f"Heart Attack Threshold ({ha_limit})", f"Age {ha_age:.1f}")
         if ha_stat == "Historical": st.error("🚨 **Threshold Reached**")
-        else: st.success("✅ Predicted")
+        else: st.success("✅ Projected")
     with c3:
         curr_burden = last_exp * (38.67 if is_mgdl else 1.0)
         st.metric("Current Total Burden", f"{curr_burden:.0f} {burden_unit}")
@@ -113,14 +122,22 @@ try:
     graph_y = df_clean['Exposure_mmol'] * (38.67 if is_mgdl else 1.0)
     fig.add_trace(go.Scatter(x=df_clean['Age'], y=graph_y, mode='lines+markers', name="Your Burden", line=dict(color='#4285F4', width=4)))
     
-    fig.add_hline(y=plaque_limit, line=dict(color='#FBBC04', dash='dash', width=2), annotation_text="Plaque Limit", annotation_position="top left")
-    fig.add_hline(y=ha_limit, line=dict(color='#EA4335', dash='dash', width=2), annotation_text="Heart Attack Limit", annotation_position="top left")
+    # High contrast lines for dark mode
+    fig.add_hline(y=plaque_limit, line=dict(color='#FBBC04', dash='dash', width=2), 
+                  annotation_text="Plaque Limit", annotation_position="top left")
+    fig.add_hline(y=ha_limit, line=dict(color='#EA4335', dash='dash', width=2), 
+                  annotation_text="Heart Attack Limit", annotation_position="top left")
     
-    fig.update_layout(xaxis_title="Age (Years)", yaxis_title=f"Cumulative Exposure ({burden_unit})", plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)')
+    fig.update_layout(
+        xaxis_title="Age (Years)", 
+        yaxis_title=f"Cumulative Exposure ({burden_unit})",
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)'
+    )
     fig.update_xaxes(showgrid=True, gridcolor='Gray')
     fig.update_yaxes(showgrid=True, gridcolor='Gray')
     
     st.plotly_chart(fig, use_container_width=True)
 
 except Exception:
-    st.info("Please enter your Date of Birth and LDL entries to calculate results.")
+    st.info("Awaiting valid Date and LDL entries to calculate results.")
