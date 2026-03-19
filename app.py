@@ -30,29 +30,30 @@ target_ldl = st.sidebar.number_input(f"Target LDL ({unit_label})", value=default
 
 # --- DATA INPUT ---
 if 'input_data' not in st.session_state:
+    # Initial seed data
     st.session_state.input_data = pd.DataFrame([
-        {"Date": dob, "LDL": 0.70},
-        {"Date": datetime(2010, 1, 1), "LDL": 3.50},
-        {"Date": datetime.now().date(), "LDL": 2.50}
+        {"Date": dob, "LDL": 0.70 if not is_mgdl else 27.0},
+        {"Date": datetime(2010, 1, 1), "LDL": 3.50 if not is_mgdl else 135.0},
+        {"Date": datetime.now().date(), "LDL": 2.50 if not is_mgdl else 97.0}
     ])
 
 st.subheader(f"1. Enter LDL Lab History ({unit_label})")
 st.info("ℹ️ **Row 1 Note:** Humans are born with an average LDL of **0.7 mmol/L (27 mg/dL)**. This is your baseline.\n\n"
         "💡 **How to Edit:** You can paste from Excel, add new rows at the bottom, or select a row and press 'Delete' on your keyboard.")
 
-# Prepare display table with Age at Test
+# Prepare display table with requested order: Date, LDL, Age at Test
 input_df = st.session_state.input_data.copy()
 input_df['Date'] = pd.to_datetime(input_df['Date']).dt.date
 input_df['Age at Test'] = input_df['Date'].apply(lambda x: round((x - dob).days / 365.25, 1))
 
 edited_df = st.data_editor(
-    input_df[['Date', 'Age at Test', 'LDL']], 
+    input_df[['Date', 'LDL', 'Age at Test']], 
     num_rows="dynamic",
     use_container_width=True,
     column_config={
         "Date": st.column_config.DateColumn("Date of Test", required=True),
-        "Age at Test": st.column_config.NumberColumn("Age at Test", disabled=True),
-        "LDL": st.column_config.NumberColumn(f"LDL ({unit_label})", required=True)
+        "LDL": st.column_config.NumberColumn(f"LDL ({unit_label})", required=True),
+        "Age at Test": st.column_config.NumberColumn("Age at Test", disabled=True, help="Calculated automatically from your Date of Birth")
     }
 )
 
@@ -95,7 +96,7 @@ try:
     pl_age, pl_stat = solve_for_age(df_clean, 130, last_age, last_exp, target_mmol)
     ha_age, ha_stat = solve_for_age(df_clean, 190, last_age, last_exp, target_mmol)
     
-    # --- OUTPUTS ---
+    # --- OUTPUT DASHBOARD ---
     st.subheader("2. Analysis Results")
     c1, c2, c3 = st.columns(3)
     with c1:
@@ -110,15 +111,15 @@ try:
         curr_burden = last_exp * (38.67 if is_mgdl else 1.0)
         st.metric("Current Total Burden", f"{curr_burden:.0f} {burden_unit}")
 
-    # --- GRAPH ---
+    # --- THE GRAPH ---
     fig = go.Figure()
     graph_y = df_clean['Exposure_mmol'] * (38.67 if is_mgdl else 1.0)
     fig.add_trace(go.Scatter(x=df_clean['Age'], y=graph_y, mode='lines+markers', name="Your Burden", line=dict(color='#4285F4', width=4)))
     
-    # Static colors that work in both themes
-    fig.add_hline(y=plaque_limit, line=dict(color='#FBBC04', dash='dash'), 
+    # Lines with visibility labels
+    fig.add_hline(y=plaque_limit, line=dict(color='#FBBC04', dash='dash', width=2), 
                   annotation_text="Plaque Limit", annotation_position="top left")
-    fig.add_hline(y=ha_limit, line=dict(color='#EA4335', dash='dash'), 
+    fig.add_hline(y=ha_limit, line=dict(color='#EA4335', dash='dash', width=2), 
                   annotation_text="Heart Attack Limit", annotation_position="top left")
     
     fig.update_layout(
@@ -126,9 +127,15 @@ try:
         yaxis_title=f"Cumulative Exposure ({burden_unit})",
         plot_bgcolor='rgba(0,0,0,0)',
         paper_bgcolor='rgba(0,0,0,0)',
-        font=dict(color="#808080") # Neutral grey font visible everywhere
+        margin=dict(l=40, r=40, t=40, b=40),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
     )
+    
+    # Force grid colors to be visible in both themes
+    fig.update_xaxes(showgrid=True, gridwidth=1, gridcolor='LightGray')
+    fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='LightGray')
+    
     st.plotly_chart(fig, use_container_width=True)
 
 except Exception:
-    st.info("Awaiting valid Date and LDL entries...")
+    st.info("Please enter your Date of Birth and LDL entries to see results.")
