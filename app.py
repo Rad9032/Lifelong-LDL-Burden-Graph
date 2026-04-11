@@ -3,6 +3,15 @@ import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime, date
 
+# Hide Streamlit footer, menu, and GitHub username
+st.markdown("""
+    <style>
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    .stDeployButton {display: none;}
+    </style>
+    """, unsafe_allow_html=True)
+
 st.set_page_config(page_title="LDL Burden Tracker", layout="wide")
 
 st.title("🫀 Lifelong LDL Burden Calculator")
